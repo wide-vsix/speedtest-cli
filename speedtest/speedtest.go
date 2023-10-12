@@ -157,6 +157,12 @@ func SpeedTest(c *cli.Context) error {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: c.Bool(defs.OptionSkipCertVerify)}
 
+	defaultDialer := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+	defaultDialer.SetMultipathTCP(true) // MPTCPを有効にする
+
 	// bind to source IP address if given, or if ipv4/ipv6 is forced
 	if src := c.String(defs.OptionSource); src != "" || (forceIPv4 || forceIPv6) {
 		var localTCPAddr *net.TCPAddr
@@ -180,34 +186,27 @@ func SpeedTest(c *cli.Context) error {
 			localTCPAddr = &net.TCPAddr{IP: addr.IP}
 		}
 
-		var dialContext func(context.Context, string, string) (net.Conn, error)
-		defaultDialer := &net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}
-
 		if localTCPAddr != nil {
 			defaultDialer.LocalAddr = localTCPAddr
 		}
-
-		switch {
-		case forceIPv4:
-			dialContext = func(ctx context.Context, network, address string) (conn net.Conn, err error) {
-				return defaultDialer.DialContext(ctx, "tcp4", address)
-			}
-		case forceIPv6:
-			dialContext = func(ctx context.Context, network, address string) (conn net.Conn, err error) {
-				return defaultDialer.DialContext(ctx, "tcp6", address)
-			}
-		default:
-			dialContext = defaultDialer.DialContext
-		}
-
-		// set default HTTP client's Transport to the one that binds the source address
-		// this is modified from http.DefaultTransport
-		transport.DialContext = dialContext
 	}
 
+	var dialContext func(context.Context, string, string) (net.Conn, error)
+	switch {
+	case forceIPv4:
+		dialContext = func(ctx context.Context, network, address string) (conn net.Conn, err error) {
+			return defaultDialer.DialContext(ctx, "tcp4", address)
+		}
+	case forceIPv6:
+		dialContext = func(ctx context.Context, network, address string) (conn net.Conn, err error) {
+			return defaultDialer.DialContext(ctx, "tcp6", address)
+		}
+	default:
+		dialContext = defaultDialer.DialContext
+	}
+
+	// set default HTTP client's Transport to the one that binds the source address
+	transport.DialContext = dialContext
 	http.DefaultClient.Transport = transport
 
 	// load server list
